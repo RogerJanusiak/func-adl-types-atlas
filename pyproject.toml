@@ -8,7 +8,7 @@ authors = [{ name = "Gordon Watts <gwatts@uw.edu>" }]
 dependencies = []
 
 [project.optional-dependencies]
-test = ["black", "flake8"]
+test = ["black", "flake8", "pytest", "jinja2", "func_adl"]
 
 [project.scripts]
 atlas_type_file_generator = "func_adl_types_atlas.build_xaod_edm:main"
