@@ -17,7 +17,11 @@ from AnaAlgorithm.AlgSequence import AlgSequence
 algSeq = AlgSequence()
 
 from AnalysisAlgorithmsConfig.ConfigAccumulator import ConfigAccumulator
-configAccumulator = ConfigAccumulator(algSeq, autoconfigFromFlags=autoconfigFromFlags)
+# Keyword args: 25.2.80+ made all ConfigAccumulator arguments keyword-only
+# (25.2.4x accepts them by keyword too).
+configAccumulator = ConfigAccumulator(
+    algSeq=algSeq, autoconfigFromFlags=autoconfigFromFlags
+)
 configSeq.fullConfigure(configAccumulator)
 
 algSeq.addSelfToJob( job )

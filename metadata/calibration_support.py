@@ -15,6 +15,7 @@ from .default_calibration_config import (
 from .calibration_event_config import CalibrationEventConfig
 
 from .metadata_for_collections import (
+    g_custom_yaml_output_names,
     g_metadata_names_no_overlap,
     g_metadata_names_overlap,
 )
@@ -117,6 +118,12 @@ class calib_tools:
               updated as requested, in the query. So even if you just update
               `jet_collection`, changing the `default_config` after calling this will
               have no effect.
+            * `config_yaml_path` (release 25+ only) bypasses the modular
+              calibration configuration entirely - the yaml file is shipped to the
+              backend verbatim and everything it specifies runs. Set it once, at
+              the top of the query, before any collection accessors. Systematics
+              are not supported with a custom yaml, and `perform_overlap_removal`
+              is ignored (the yaml decides). Pass `None` to turn it back off.
         """
 
         # Get a base calibration config we can modify (e.g. a copy)
@@ -132,6 +139,16 @@ class calib_tools:
                 raise ValueError(
                     f"Unknown calibration config option: {k} in `query_update`"
                 )
+
+        # Normalize and validate a custom config yaml, if one is set.
+        if getattr(config, "config_yaml_path", None) is not None:
+            yaml_path = Path(config.config_yaml_path)
+            if not yaml_path.exists():
+                raise ValueError(
+                    f"Custom calibration config yaml not found: {yaml_path}"
+                )
+            config.config_yaml_path = str(yaml_path.resolve())
+            _check_custom_yaml_text(yaml_path.read_text())
 
         # Place it in the query stream for later use
         return query.QMetaData({"calibration": config})
@@ -201,6 +218,83 @@ class calib_tools:
 
 _g_jinja2_env: Optional[jinja2.Environment] = None
 
+_g_custom_yaml_cache: Dict[str, str] = {}
+
+
+def _check_custom_yaml_text(text: str) -> None:
+    """Best-effort validation of a user-supplied config.yaml.
+
+    Rejects empty files and yaml that turns systematics on - systematics are
+    too slow to run in ServiceX with a custom yaml. This is a regex scan, not
+    a full yaml parse; the `sys_error != "NOSYS"` check in
+    `fixup_collection_call` is the authoritative guard.
+    """
+    if text.strip() == "":
+        raise ValueError("Custom calibration config.yaml is empty.")
+    if re.search(
+        r"^\s*runSystematics\s*:\s*(true|yes|on|1)\b",
+        text,
+        re.IGNORECASE | re.MULTILINE,
+    ):
+        raise ValueError(
+            "Custom calibration config.yaml enables runSystematics - systematics "
+            "are not supported with a custom yaml in ServiceX."
+        )
+
+
+def _strip_output_block(text: str) -> str:
+    """Remove the top-level `Output:` block from a config.yaml, if present.
+
+    The Output block configures AnalysisBase's own ntuple writing, which is
+    not used in ServiceX - the query decides what is returned. Removing it
+    (rather than requiring the user to) lets an analysis group's existing
+    config.yaml be uploaded unmodified. The rest of the text is preserved
+    byte-for-byte, so the strip is textual: drop from `Output:` at column 0
+    through the last indented line of the block.
+    """
+    lines = text.splitlines(keepends=True)
+    out_lines = []
+    in_output = False
+    stripped_something = False
+    for line in lines:
+        if re.match(r"^Output\s*:", line):
+            in_output = True
+            stripped_something = True
+            continue
+        if in_output:
+            # Block ends at the next top-level key. Blank lines and
+            # column-0 comments are swallowed with the block.
+            if re.match(r"^[^\s#]", line):
+                in_output = False
+            else:
+                continue
+        out_lines.append(line)
+    if stripped_something:
+        logging.getLogger(__name__).info(
+            "Removed the `Output:` block from the custom calibration "
+            "config.yaml - ntuple output is managed by ServiceX."
+        )
+    return "".join(out_lines)
+
+
+def _load_custom_yaml(path: str) -> str:
+    """Read the user's config.yaml once and cache the text.
+
+    The cache guarantees every collection accessor in the query emits
+    byte-identical metadata (func_adl requires same-named `add_job_script`
+    blocks to be identical), even if the file changes mid-query-build. A
+    consequence is that edits to the file after its first use in a Python
+    session are ignored.
+    """
+    if path not in _g_custom_yaml_cache:
+        p = Path(path)
+        if not p.exists():
+            raise ValueError(f"Custom calibration config yaml not found: {path}")
+        text = p.read_text()
+        _check_custom_yaml_text(text)
+        _g_custom_yaml_cache[path] = _strip_output_block(text)
+    return _g_custom_yaml_cache[path]
+
 
 def template_configure() -> jinja2.Environment:
     """Configure the jinja2 template"""
@@ -255,6 +349,11 @@ def fixup_collection_call(
         # user has requested...
         if sys_error != "NOSYS":
             calibrate = True
+        elif getattr(calibration_info, "config_yaml_path", None) is not None:
+            # A user-supplied config.yaml only runs through the calibration
+            # path, so it overrides a dataset default of calibrate=False
+            # (e.g. PHYSLITE).
+            calibrate = True
         else:
             calibrate = calibration_info.calibrate
     else:
@@ -272,6 +371,51 @@ def fixup_collection_call(
     # Uncalibrated collection is pretty easy - nothing to do here!
     if not calibrate:
         output_collection_name = bank_name
+    elif getattr(calibration_info, "config_yaml_path", None) is not None:
+        # User-supplied config.yaml - ship it verbatim and skip the modular
+        # template chain. The yaml decides what runs (overlap removal, etc.).
+        if sys_error != "NOSYS":
+            raise ValueError(
+                f"Systematic error '{sys_error}' requested, but systematics are "
+                "not supported when a custom calibration config.yaml is used. "
+                "Remove the custom yaml or use sys_error='NOSYS'."
+            )
+        if collection_attr_name not in g_custom_yaml_output_names:
+            raise NotImplementedError(
+                f"Collection '{collection_attr_name}' is not supported with a "
+                "custom calibration config.yaml."
+            )
+
+        yaml_text = _load_custom_yaml(calibration_info.config_yaml_path)
+
+        j_env = template_configure()
+        dependent_md_name = None
+        for md_name in ("custom_config_yaml", "add_calibration_to_job"):
+            md_template = j_env.get_template(f"{md_name}.py")
+            text = md_template.render(
+                calib=calibration_info,
+                sys_error=sys_error,
+                custom_yaml_python_literal=repr(yaml_text),
+            )
+            if "CUSTOM_CONFIG_YAML_UNSUPPORTED" in text:
+                raise NotImplementedError(
+                    "A custom calibration config.yaml is only supported on "
+                    "release 25 or later type packages."
+                )
+            md_text = {
+                "metadata_type": "add_job_script",
+                "name": md_name,
+                "script": text.splitlines(),
+            }
+            if dependent_md_name is not None:
+                md_text["depends_on"] = [dependent_md_name]
+
+            new_s = new_s.MetaData(md_text)
+            dependent_md_name = md_name
+
+        output_collection_name = g_custom_yaml_output_names[
+            collection_attr_name
+        ].format(**vars(calibration_info))
     else:
         # Going to have to run calibrations, so load up the meta-data
         j_env = template_configure()

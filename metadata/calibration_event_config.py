@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -67,3 +68,9 @@ class CalibrationEventConfig:
 
     # ** True if we can return uncalibrated (PHYSLITE doesn't)
     uncalibrated_possible: bool
+
+    # ** Custom AnalysisBase text-config yaml (release 25+ only)
+    # Path to a local Analysis Base `config.yaml` file. If set, the modular
+    # calibration configuration above is bypassed: the yaml is shipped to the
+    # backend verbatim and loaded with `TextConfig(<file>)`.
+    config_yaml_path: Optional[str] = None

@@ -43,6 +43,15 @@ g_metadata_names_no_overlap = {
     ],
 }
 
+g_custom_yaml_output_names = {
+    "electron_collection": "OutElectrons_NOSYS",
+    "muon_collection": "OutMuons_NOSYS",
+    "photon_collection": "OutPhotons_NOSYS",
+    "tau_collection": "OutTauJets_NOSYS",
+    "jet_collection": "OutJets_NOSYS",
+    # TODO: Add other collections!
+}
+
 g_metadata_names_overlap = {
     "jet_collection": [
         "sys_error_tool",

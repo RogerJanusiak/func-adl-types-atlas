@@ -11,6 +11,22 @@ TEST(t_metadata_file_finder, find_basic_files)
     EXPECT_EQ(finder("corrections_tau.py"), "../metadata/corrections_tau.py");
 }
 
+// The custom config yaml template is release 25+ only; earlier releases fall
+// back to the base stub.
+TEST(t_metadata_file_finder, find_custom_config_yaml_r25)
+{
+    metadata_file_finder finder("25.2.15", "../metadata/");
+
+    EXPECT_EQ(finder("custom_config_yaml.py"), "../metadata/25/custom_config_yaml.py");
+}
+
+TEST(t_metadata_file_finder, find_custom_config_yaml_r21_base)
+{
+    metadata_file_finder finder("21.2.100", "../metadata/");
+
+    EXPECT_EQ(finder("custom_config_yaml.py"), "../metadata/custom_config_yaml.py");
+}
+
 TEST(t_metadata_file_finder, find_from_base)
 {
     metadata_file_finder finder("20.1.1", "../tests/metadata/");

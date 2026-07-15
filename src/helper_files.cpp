@@ -35,6 +35,7 @@ vector<helper_file> _g_helper_files {
     { "corrections_overlap.py", "templates/corrections_overlap.py", {}},
     { "corrections_met.py", "templates/corrections_met.py", {}},
     { "add_calibration_to_job.py", "templates/add_calibration_to_job.py", {}},
+    { "custom_config_yaml.py", "templates/custom_config_yaml.py", {}},
 };
 
 const std::string WHITESPACE = " \n\r\t\f\v";
